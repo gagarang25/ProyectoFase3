@@ -1,0 +1,24 @@
+[
+  {
+    "version": "model-v1.1.0",
+    "reemplaza_a": "model-v1.0.0",
+    "estado": "candidato (PR pendiente)",
+    "corte": "2026-11-30",
+    "datos": "data-v1.1.0",
+    "motivos": [
+      "MAE reciente 1.46 > 1.3 (alerta A5 de la A8)",
+      "PSI dias_comprometidos = 0.38 > 0.25",
+      "86% de las órdenes con carga de planta fuera del rango de entrenamiento"
+    ],
+    "mae_reciente": 1.3736,
+    "mae_anterior": 1.5208,
+    "desfase_rango_dias": 1,
+    "version_champion": "model-v1.0.0",
+    "version_candidata": "model-v1.1.0",
+    "version_datos": "data-v1.1.0",
+    "sha256_lote": "f72cc985360b51ca61eed18f57146c3e1330d1753879d64a352aa1c4355ce908",
+    "git_commit": "2a15467ba52b4f450d2124a23d81bd65c1de1d10",
+    "ejecucion": "https://github.com/gagarang25/ProyectoFase3/actions/runs/45290456231",
+    "fecha_utc": "2026-11-23T23:38:47+00:00"
+  }
+]

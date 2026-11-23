@@ -1,0 +1,22 @@
+{
+  "descripcion": "Lotes de producción con etiqueta (entrenamiento continuo, Fase 3)",
+  "archivos": {
+    "entregas_produccion_drift_planta_hasta_2026-11-30.csv": {
+      "version": "data-v1.1.0",
+      "filas": 2068,
+      "columnas": 30,
+      "periodo_pedido": [
+        "2026-10-01",
+        "2026-11-29"
+      ],
+      "entregadas_hasta": "2026-11-30",
+      "escenario": "drift_planta",
+      "tasa_retraso": 0.2616,
+      "sha256": "f72cc985360b51ca61eed18f57146c3e1330d1753879d64a352aa1c4355ce908",
+      "generador": "monitoreo/src/monitoreo_semanal.py::produccion (semilla 42, continuación de data-v1.0.0)",
+      "creado_utc": "2026-11-23T23:38:32+00:00",
+      "git_commit": "2a15467ba52b4f450d2124a23d81bd65c1de1d10"
+    }
+  },
+  "version": "data-v1.1.0"
+}

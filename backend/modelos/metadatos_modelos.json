@@ -1,8 +1,8 @@
 {
-  "version_modelos": "model-v1.0.0",
-  "version_datos": "data-v1.0.0 (Actividad 6)",
+  "version_modelos": "model-v1.1.0",
+  "version_datos": "data-v1.0.0 (Actividad 6) + data-v1.1.0 (lote de producción)",
   "sha256_datos": "677bab165d385a5720446e215ce8729e8715cb2e4caacd9ac833cc5cb40ba103",
-  "git_commit": "082d216dab11ca738add440bfd7b9d4ee45bab64",
+  "git_commit": "2a15467ba52b4f450d2124a23d81bd65c1de1d10",
   "corte_temporal": "2026-05-01",
   "entradas": [
     "tipo_cliente",
@@ -132,7 +132,7 @@
     ]
   },
   "eta": {
-    "algoritmo": "HistGradientBoostingRegressor (pérdida absoluta) + cuantiles 0.10 y 0.90",
+    "algoritmo": "HistGradientBoostingRegressor (pérdida absoluta) + cuantiles 0.10 y 0.90 · reentrenado (CT, runbook RB-02)",
     "parametros": {
       "learning_rate": 0.05,
       "max_leaf_nodes": 15,
@@ -143,22 +143,25 @@
       0.9
     ],
     "metricas_prueba": {
-      "mae_dias": 1.0495511049723756,
-      "mae_sin_redondeo": 1.0643944573149207,
-      "rmse_dias": 1.5689163836178557,
-      "dentro_1_dia": 0.7707182320441989,
-      "sesgo_dias": -0.25224447513812154,
-      "cobertura_rango": 0.9090124309392266,
-      "cuantiles_rango": [
-        0.1,
-        0.9
-      ],
-      "ancho_promedio_rango": 5.241367403314917,
+      "ordenes": 5792,
+      "mae_dias": 1.0398825966850829,
+      "cobertura_rango": 0.9652969613259669,
+      "dentro_1_dia": 0.773135359116022,
       "mae_linea_base_sap": 1.7178867403314917,
-      "dentro_1_dia_sap": 0.4906767955801105,
-      "mae_linea_base_nominal": 1.4152279005524862,
-      "mae_cv": 1.0920825777961634,
-      "mejora_vs_sap": 0.3890452261306533
+      "mejora_vs_sap": 0.39467336683417087,
+      "ancho_promedio_rango": 6.77917817679558
+    },
+    "desfase_rango_dias": 1,
+    "reentrenamiento": {
+      "corte": "2026-11-30",
+      "peso_reciente": 10.0,
+      "ordenes_entrenamiento": 29076,
+      "ordenes_produccion_usadas": 1803,
+      "motivos": [
+        "MAE reciente 1.46 > 1.3 (alerta A5 de la A8)",
+        "PSI dias_comprometidos = 0.38 > 0.25",
+        "86% de las órdenes con carga de planta fuera del rango de entrenamiento"
+      ]
     }
   },
   "riesgo_retraso": {
@@ -193,9 +196,36 @@
     "joblib": "1.6.0"
   },
   "archivos": {
-    "eta_mediana.joblib": "6ba2b28abb50f0b3c9e334093be819d145f2eafc89f418c286c7b492cacaeabb",
-    "eta_rango_inferior.joblib": "ff7c9947ec8aafd4af762d6de9878f03680dde12c74445dde3d9f34c5a9d671a",
-    "eta_rango_superior.joblib": "274a962b3f3d4e11d0ab528c3dedcf2bfc09cba1f6e2a98b7181dffb304e8fd2",
+    "eta_mediana.joblib": "51cfbfd47a723c42c14892c7c5901f5292da2ef9f4aa5f7a531929c80a582ce3",
+    "eta_rango_inferior.joblib": "9410e796a06408d7d7c611afec919471a564906ca201271e30dbcafb2f54024f",
+    "eta_rango_superior.joblib": "bf243df2efd2c9715f09b4ef98659e3fe64cc3e75dd91ebeef50b09f518e5452",
     "riesgo_retraso.joblib": "2d8d476c804e7a520a2eb103a8f4cdbd5d3217d9e3ca22ab8cd7bd1fc39be5ac"
+  },
+  "sha256_datos_lote": "f72cc985360b51ca61eed18f57146c3e1330d1753879d64a352aa1c4355ce908",
+  "fecha_entrenamiento_utc": "2026-11-23T23:38:47+00:00",
+  "modelo_anterior": "model-v1.0.0",
+  "evaluaciones": {
+    "prueba_historica": {
+      "archivo": "datos/entregas/entregas_cab.csv",
+      "columna": "fecha_pedido",
+      "desde": "2026-05-01",
+      "principal_riesgo": true,
+      "nota": "periodo incluido en el reentrenamiento: verifica que el modelo no 'olvide'"
+    },
+    "validacion_reciente": {
+      "archivo": "datos/entregas/lotes/entregas_produccion_drift_planta_hasta_2026-11-30.csv",
+      "columna": "fecha_entrega_real",
+      "desde": "2026-11-24",
+      "hasta": "2026-11-30",
+      "principal_eta": true,
+      "principal_riesgo": false,
+      "nivel": "aviso",
+      "metricas_eta": {
+        "mae_dias": 1.3735849056603773,
+        "cobertura_rango": 0.8867924528301887
+      },
+      "mae_modelo_anterior": 1.5207547169811322,
+      "nota": "última semana entregada: ningún modelo la vio al entrenar"
+    }
   }
 }
