@@ -8,7 +8,7 @@ resources:
 images:
   - name: cab-chatbot-api
     newName: ghcr.io/gagarang25/proyectofase3-api
-    newTag: sha-1f32a60
+    newTag: sha-8cc78fd
 replicas:
   - name: cab-chatbot-api
     count: 1
