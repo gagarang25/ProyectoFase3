@@ -1,0 +1,8 @@
+# Runtime anterior del router (Fase 2) y etapa "exportador" del Dockerfile (PyTorch → ONNX).
+# torch se instala aparte desde el índice de CPU de PyTorch: pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+transformers==5.21.0
+sentencepiece==0.2.2
+safetensors==0.8.0
+huggingface_hub>=1.0,<3
+protobuf==7.36.2
+onnx==1.23.2

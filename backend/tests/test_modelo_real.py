@@ -1,5 +1,7 @@
 """Pruebas del router mDeBERTa-v3 real. Se ejecutan donde el modelo está disponible
-(dentro del contenedor: docker compose exec api pytest -q). Fuera de él se omiten."""
+(dentro del contenedor: docker compose exec api pytest -q). Fuera de él se omiten.
+
+Fase 3: la imagen trae el router en ONNX (router.onnx); si existe se prueba ese, si no, el de PyTorch."""
 
 from __future__ import annotations
 
@@ -11,20 +13,26 @@ import numpy as np
 import pytest
 
 RUTA = Path(os.getenv("MODELO_ROUTER_RUTA", Path(__file__).resolve().parents[1] / "modelo_router"))
-pytestmark = pytest.mark.skipif(not (RUTA / "config.json").exists(), reason=f"modelo no disponible en {RUTA}")
+pytestmark = pytest.mark.skipif(not (RUTA / "config_cab.json").exists(), reason=f"modelo no disponible en {RUTA}")
 
 
 @pytest.fixture(scope="module")
 def router():
-    from app.router_intencion import RouterIntencion
+    from app.router_intencion import crear_router
 
-    return RouterIntencion(RUTA, hilos=int(os.getenv("HILOS_CPU", "2")))
+    r = crear_router(RUTA, None, int(os.getenv("HILOS_CPU", "2")), os.getenv("ROUTER_RUNTIME", "auto"))
+    assert r.cargado, r.info()
+    return r
 
 
 def test_modelo_coincide_con_la_politica(router):
     from app.politica import CLASES
 
-    assert [router.modelo.config.id2label[i] for i in range(len(CLASES))] == CLASES
+    if router.runtime == "pytorch":
+        assert [router.modelo.config.id2label[i] for i in range(len(CLASES))] == CLASES
+    else:
+        assert router.cfg["clases"] == CLASES
+        assert router.info()["equivalencia_pytorch"] == "560/560"  # compuerta del build
     assert 0.5 <= router.umbral < 1 and router.temperatura > 0
 
 

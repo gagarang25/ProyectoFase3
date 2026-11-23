@@ -26,6 +26,7 @@ import argparse
 import csv
 import json
 import statistics
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -90,9 +91,16 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--url", default="http://localhost:8080", help="URL del frontend o de la API")
     p.add_argument("--latencia", type=int, default=100, help="solicitudes para medir latencia")
+    p.add_argument("--salida", type=Path, help="carpeta de resultados (por defecto pruebas/resultados/<fecha>)")
+    p.add_argument("--estricto", action="store_true",
+                   help="Fase 3 (pipeline): termina con error si falla un caso, si el router no coincide con el "
+                        "modelo de referencia o si el p95 supera --p95-max")
+    p.add_argument("--p95-max", type=float, default=400.0, help="SLO de latencia de la A8 (ms)")
+    p.add_argument("--acc-min", type=float, default=0.95, help="accuracy mínima en la prueba externa (Fase 2: 0.964)")
+    p.add_argument("--erroneas-max", type=int, default=6, help="respuestas automáticas erróneas (Fase 2: 6)")
     args = p.parse_args()
     base = args.url.rstrip("/")
-    salida = RAIZ / "pruebas" / "resultados" / datetime.now().strftime("%Y%m%d_%H%M")
+    salida = args.salida or RAIZ / "pruebas" / "resultados" / datetime.now().strftime("%Y%m%d_%H%M")
     salida.mkdir(parents=True, exist_ok=True)
 
     # 0. Salud
@@ -190,6 +198,21 @@ def main() -> None:
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print("\n".join(resumen))
     print(f"\nArchivos en {salida}")
+    if args.estricto:
+        fallas = []
+        if pasan != len(filas):
+            fallas.append(f"{len(filas) - pasan} casos funcionales fallan")
+        if coincidencias and sum(coincidencias) != len(coincidencias):
+            fallas.append(f"router: {sum(coincidencias)}/{len(coincidencias)} coincidencias con el modelo de referencia")
+        if acc < args.acc_min:
+            fallas.append(f"accuracy externa {acc:.3f} < {args.acc_min}")
+        if len(erroneas) > args.erroneas_max:
+            fallas.append(f"{len(erroneas)} respuestas automáticas erróneas > {args.erroneas_max}")
+        if lat["p95_ms"] > args.p95_max:
+            fallas.append(f"p95 {lat['p95_ms']:.0f} ms > {args.p95_max:.0f} ms (SLO)")
+        if fallas:
+            sys.exit("PRUEBAS DE ACEPTACIÓN NO SUPERADAS: " + "; ".join(fallas))
+        print("Pruebas de aceptación superadas.")
 
 
 if __name__ == "__main__":

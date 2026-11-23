@@ -25,10 +25,11 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import config as cfg_mod
+from . import metricas
 from .entidades import detectar_idioma, extraer_oc, normalizar_oc
 from .esquemas import ChatEntrada, DatosOrden, MensajeEntrada, Paso, RespuestaChat, RespuestaIntencion
 from .modelos_entrega import ModelosEntrega
@@ -58,7 +59,8 @@ def inicializar(router=None) -> None:
     estado.cfg = cfg_mod.cargar()
     estado.entrega = ModelosEntrega(estado.cfg.modelos_entrega)
     estado.sap = SapSimulado(estado.cfg.datos_sap, estado.cfg.fecha_referencia, estado.entrega.entradas)
-    estado.router = router or crear_router(estado.cfg.modelo_router, estado.cfg.umbral_confianza, estado.cfg.hilos_cpu)
+    estado.router = router or crear_router(estado.cfg.modelo_router, estado.cfg.umbral_confianza,
+                                                 estado.cfg.hilos_cpu, estado.cfg.router_runtime)
     estado.inicio = datetime.now(timezone.utc)
     if estado.cfg.bitacora and not log_bitacora.handlers:
         try:
@@ -67,6 +69,7 @@ def inicializar(router=None) -> None:
             log_bitacora.addHandler(manejador)
         except OSError as error:  # sin permiso de escritura: la bitácora sigue en la salida estándar
             log.warning("No se pudo abrir la bitácora %s (%s); se registra solo en consola", estado.cfg.bitacora, error)
+    metricas.publicar_info(estado.cfg.version_app, estado.cfg.git_commit, estado.router.info(), estado.entrega.info())
     log.info("API lista: %d órdenes en SAP simulado, router cargado=%s", len(estado.sap), estado.router.cargado)
 
 
@@ -78,10 +81,10 @@ async def ciclo_de_vida(app: FastAPI):
 
 
 app = FastAPI(
-    title="API del chatbot de CAB (prototipo Fase 2)",
+    title="API del chatbot de CAB (prototipo Fase 3)",
     description="Estatus de órdenes y fecha estimada de entrega para clientes B2B de Componentes Automotrices "
                 "del Bajío (empresa ficticia). Datos simulados.",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=ciclo_de_vida,
 )
 _cors = cfg_mod.cargar().cors_origenes
@@ -92,7 +95,10 @@ app.add_middleware(CORSMiddleware, allow_origins=_cors, allow_methods=["GET", "P
 async def medir_tiempo(request: Request, call_next):
     inicio = time.perf_counter()
     respuesta = await call_next(request)
-    respuesta.headers["X-Tiempo-ms"] = f"{(time.perf_counter() - inicio) * 1000:.1f}"
+    segundos = time.perf_counter() - inicio
+    respuesta.headers["X-Tiempo-ms"] = f"{segundos * 1000:.1f}"
+    ruta = getattr(request.scope.get("route"), "path", "otra")  # plantilla (/api/ordenes/{oc}), no el valor
+    metricas.observar_solicitud(ruta, request.method, respuesta.status_code, segundos)
     return respuesta
 
 
@@ -116,6 +122,13 @@ def registrar(evento: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+@app.get("/metrics", tags=["operación"], include_in_schema=False)
+def metricas_prometheus():
+    """Métricas de servicio y de modelo en formato Prometheus (Fase 3)."""
+    cuerpo, tipo = metricas.exportar()
+    return Response(content=cuerpo, media_type=tipo)
+
+
 @app.get("/api/salud", tags=["operación"])
 def salud():
     return {
@@ -228,6 +241,7 @@ def chat(entrada: ChatEntrada, cliente: str = Depends(cliente_autenticado)):
             est = None
             if orden.estatus != "entregada":
                 est = estado.entrega.estimar(orden.datos_modelo, idioma, orden.fecha_pedido, estado.cfg.fecha_referencia)
+                metricas.observar_estimacion(est.eta_dias, est.prob_retraso)
                 marcar("eta", f"{est.eta_dias} días [{est.eta_min_dias}-{est.eta_max_dias}], "
                               f"p(retraso)={est.prob_retraso:.2f}")
             critico = bool(orden.pedido_urgente and est and est.riesgo_alto)  # R03: confirmación humana
@@ -240,6 +254,8 @@ def chat(entrada: ChatEntrada, cliente: str = Depends(cliente_autenticado)):
             r.datos = {"orden": orden.publica(), "estimacion": est.a_dict() if est else None, "critico": critico}
 
     marcar("respuesta", r.accion)
+    if not entrada.intencion_elegida:
+        metricas.observar_decision(d.intencion, d.accion, idioma, d.confianza)
     r.traza = traza
     registrar({"cliente": cliente, "intencion": r.intencion, "confianza": r.confianza, "accion": r.accion,
                "oc": r.oc, "idioma": idioma, "largo_mensaje": len(entrada.mensaje), "folio": r.folio,

@@ -58,9 +58,12 @@ class RouterIntencion:
         log.info("Router cargado en %.1f s (umbral %.2f, temperatura %.3f)", self.segundos_carga, self.umbral,
                  self.temperatura)
 
+    runtime = "pytorch"
+
     def info(self) -> dict:
         return {
             "cargado": True,
+            "runtime": self.runtime,
             "modelo_base": self.cfg.get("modelo_base"),
             "version": self.cfg.get("version_modelo"),
             "version_datos": self.cfg.get("version_datos"),
@@ -79,11 +82,16 @@ class RouterIntencion:
         return decidir(softmax(self.logits(texto), self.temperatura), self.umbral)
 
 
-def crear_router(carpeta: Path, umbral: float | None, hilos: int):
-    if not (carpeta / "config.json").exists():
+def crear_router(carpeta: Path, umbral: float | None, hilos: int, runtime: str = "auto"):
+    """runtime: "onnx" (Fase 3, imagen sin PyTorch), "pytorch" (Fase 2) o "auto" (ONNX si existe router.onnx)."""
+    if not (carpeta / "config_cab.json").exists() and not (carpeta / "config.json").exists():
         log.warning("No se encontró el modelo del router en %s: se escalará todo a un ejecutivo", carpeta)
         return RouterNoDisponible(f"modelo no encontrado en {carpeta}")
+    usar_onnx = runtime == "onnx" or (runtime == "auto" and (carpeta / "router.onnx").exists())
     try:
+        if usar_onnx:
+            from .router_onnx import RouterIntencionOnnx
+            return RouterIntencionOnnx(carpeta, umbral, hilos)
         return RouterIntencion(carpeta, umbral, hilos)
     except Exception as error:  # noqa: BLE001 - cualquier falla de carga → falla segura
         log.exception("No se pudo cargar el router")

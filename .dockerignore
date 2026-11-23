@@ -4,13 +4,23 @@
 **/*.pyc
 .pytest_cache
 .env
+.venv*
 salida_router
 resultados
 docs
 pruebas/resultados
 bitacora
-datos/mensajes_cab
-datos/entregas/entregas_cab.csv
 entrenamiento
+monitoreo
+optimizacion
+gitops
+pipeline
+evidencias
 *.ipynb
 *.zip
+datos/entregas/entregas_cab.csv
+datos/entregas/lotes
+# Del conjunto de mensajes solo entran los dos archivos de la compuerta de equivalencia ONNX
+datos/mensajes_cab/*
+!datos/mensajes_cab/prueba.csv
+!datos/mensajes_cab/prueba_externa_v3.csv

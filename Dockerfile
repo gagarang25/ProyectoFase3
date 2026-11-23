@@ -1,69 +1,82 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# Imagen de la API del chatbot de CAB (backend FastAPI + modelos + frontend estático)
+# Imagen de la API del chatbot de CAB · app-v2.0.0 (Proyecto Fase 3)
 #
-# - En local, docker compose usa esta imagen para el servicio "api" y sirve el
-#   frontend aparte con nginx (frontend/Dockerfile).
-# - En la nube (Hugging Face Spaces, Cloud Run, Azure Container Apps) esta imagen
-#   sola es la aplicación completa: la API también entrega el chat en "/".
+# Construcción en dos etapas (multi-stage):
+#   1. exportador  Descarga el router model-v1.0.0 de Hugging Face Hub, lo exporta a ONNX, cuantiza la tabla
+#                  de embeddings a INT8 (optimización elegida en la Actividad 9) y verifica que sus acciones
+#                  sean idénticas a las de PyTorch en 560 mensajes. Si la compuerta falla, la imagen no se crea.
+#   2. final       Solo lo necesario para servir: ONNX Runtime, scikit-learn y la API. Sin PyTorch.
 #
-# Construir:  docker build -t cab-chatbot-api:1.0.0 .
-# Ejecutar:   docker run --rm -p 8000:8000 cab-chatbot-api:1.0.0
+# La imagen con PyTorch de la Fase 2 se conserva en Dockerfile.pytorch.
+#
+# Construir:  docker build -t cab-chatbot-api:2.0.0 --build-arg GIT_COMMIT=$(git rev-parse HEAD) .
+# Ejecutar:   docker run --rm -p 8000:8000 cab-chatbot-api:2.0.0      (chat en http://localhost:8000)
 # =============================================================================
 
-# 1. Imagen base ligera y compatible: Python 3.12 sobre Debian slim.
-FROM python:3.12-slim
+# ---------------------------------------------------------------- 1. exportador
+FROM python:3.12-slim AS exportador
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 HF_HUB_DISABLE_TELEMETRY=1 TOKENIZERS_PARALLELISM=false
+WORKDIR /exportar
+RUN pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+COPY backend/requirements.txt backend/requirements-pytorch.txt ./
+RUN pip install -r requirements.txt -r requirements-pytorch.txt
+
+# Versión del router: cambiarla no requiere tocar código, solo estos argumentos (los fija el pipeline).
+ARG MODELO_ROUTER=gagarang/router-intencion-cab-mdeberta
+ARG MODELO_REVISION=model-v1.0.0
+RUN python -c "from huggingface_hub import snapshot_download; \
+snapshot_download(repo_id='${MODELO_ROUTER}', revision='${MODELO_REVISION}', local_dir='/modelo_hf', \
+allow_patterns=['*.json', '*.safetensors', '*.model', '*.txt'])"
+
+COPY docker/exportar_router_onnx.py ./
+COPY datos/mensajes_cab/prueba.csv datos/mensajes_cab/prueba_externa_v3.csv ./datos/
+RUN python exportar_router_onnx.py --modelo /modelo_hf --salida /modelo_onnx --datos ./datos
+
+# ---------------------------------------------------------------- 2. final
+FROM python:3.12-slim AS final
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HF_HUB_DISABLE_TELEMETRY=1 \
     TOKENIZERS_PARALLELISM=false
 
-# 2. Directorio de trabajo dentro del contenedor.
 WORKDIR /app
-
-# 3. Dependencias. PyTorch para CPU desde su índice oficial (sin librerías de GPU, ~5 veces más ligero).
-#    Se instalan antes de copiar el código para aprovechar la caché de capas de Docker.
-RUN pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
 COPY backend/requirements.txt .
 RUN pip install -r requirements.txt
 
-# 4. Router de intención: se descarga de Hugging Face Hub la versión etiquetada.
-#    Cambiar el modelo o la versión no requiere tocar código, solo estos argumentos.
-ARG MODELO_ROUTER=gagarang/router-intencion-cab-mdeberta
-ARG MODELO_REVISION=model-v1.0.0
-RUN python -c "from huggingface_hub import snapshot_download; \
-snapshot_download(repo_id='${MODELO_ROUTER}', revision='${MODELO_REVISION}', local_dir='/app/modelo_router', \
-allow_patterns=['*.json', '*.safetensors', '*.model', '*.txt'])" \
- && ls -lh /app/modelo_router
-
-# 5. Código, modelos tabulares, datos del SAP simulado, pruebas y frontend.
+# Router ONNX ya verificado en la etapa anterior (incluye verificacion_onnx.json para la auditoría).
+COPY --from=exportador /modelo_onnx ./modelo_router
 COPY backend/app ./app
 COPY backend/modelos ./modelos
 COPY backend/tests ./tests
 COPY datos/entregas/piloto_ab_cab.csv ./datos/piloto_ab_cab.csv
 COPY frontend/public ./frontend
 
-# Trazabilidad: el commit de Git y la versión quedan dentro de la imagen y se ven en /api/salud.
+# Trazabilidad: commit, versión y fecha de construcción quedan dentro de la imagen y se ven en /api/salud y /metrics.
 ARG GIT_COMMIT=desconocido
+ARG VERSION_APP=app-v2.0.0
 ENV GIT_COMMIT=${GIT_COMMIT} \
-    VERSION_APP=app-v1.0.0 \
+    VERSION_APP=${VERSION_APP} \
+    ROUTER_RUNTIME=onnx \
     MODELO_ROUTER_RUTA=/app/modelo_router \
     MODELOS_ENTREGA_RUTA=/app/modelos \
     DATOS_SAP_RUTA=/app/datos/piloto_ab_cab.csv \
     FRONTEND_RUTA=/app/frontend \
     PORT=8000
+LABEL org.opencontainers.image.title="cab-chatbot-api" \
+      org.opencontainers.image.source="https://github.com/gagarang25/ProyectoFase3" \
+      org.opencontainers.image.description="Chatbot de estatus de órdenes y ETA de CAB (prototipo académico, datos simulados)" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.version="${VERSION_APP}"
 
-# 6. Usuario sin privilegios (uid 1000, el que exige Hugging Face Spaces).
+# Usuario sin privilegios (uid 1000): requisito de Kubernetes (runAsNonRoot) y de Hugging Face Spaces.
 RUN useradd --create-home --uid 1000 cab && chown -R cab:cab /app
-USER cab
+USER 1000
 
-# 7. Puerto del servicio y verificación de salud (Docker marca el contenedor como "healthy").
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\", 8000)}/api/salud', timeout=4)"
 
-# 8. Comando de ejecución. PORT permite que la plataforma en la nube elija el puerto.
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

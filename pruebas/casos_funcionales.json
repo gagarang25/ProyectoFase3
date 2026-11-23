@@ -29,7 +29,21 @@
   "esperado": {
    "status": 200,
    "campos": {
-    "info.version": "1.0.0"
+    "info.version": "2.0.0"
+   }
+  }
+ },
+ {
+  "id": "F16",
+  "categoria": "funcional",
+  "descripcion": "Salud informa el runtime ONNX y la equivalencia 560/560 (Fase 3)",
+  "ruta": "/api/salud",
+  "esperado": {
+   "status": 200,
+   "campos": {
+    "router.runtime": "onnxruntime",
+    "router.equivalencia_pytorch": "560/560",
+    "version_app": "app-v2.0.0"
    }
   }
  },

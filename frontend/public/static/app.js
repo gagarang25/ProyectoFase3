@@ -169,7 +169,7 @@
   }
 
   function saludo() {
-    burbuja("Hola, soy el asistente de órdenes de CAB. Puedo decirte el estatus de una orden de compra o su fecha estimada de entrega. Para otros temas te comunico con tu ejecutivo.", "bot");
+    burbuja("Hola, soy el asistente virtual de órdenes de CAB: un sistema de inteligencia artificial, no una persona. Puedo decirte el estatus de una orden de compra o su fecha estimada de entrega. Para otros temas te comunico con tu ejecutivo.", "bot");
   }
 
   iniciar();

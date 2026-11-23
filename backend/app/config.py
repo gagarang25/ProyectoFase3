@@ -38,11 +38,13 @@ class Configuracion:
     umbral_confianza: float | None = field(
         default_factory=lambda: float(os.environ["UMBRAL_CONFIANZA"]) if os.getenv("UMBRAL_CONFIANZA") else None)
     hilos_cpu: int = field(default_factory=lambda: int(os.getenv("HILOS_CPU", "2")))
+    # Fase 3: "onnx" (imagen optimizada, sin PyTorch), "pytorch" (Fase 2) o "auto" (ONNX si existe router.onnx)
+    router_runtime: str = field(default_factory=lambda: os.getenv("ROUTER_RUNTIME", "auto"))
     cors_origenes: list[str] = field(default_factory=lambda: [o.strip() for o in os.getenv(
         "CORS_ORIGENES", "http://localhost:8080,http://127.0.0.1:8080").split(",") if o.strip()])
     clientes: dict[str, str] = field(default_factory=lambda: json.loads(os.getenv("CLIENTES_JSON", "null")) or CLIENTES_DEMO)
     git_commit: str = field(default_factory=lambda: os.getenv("GIT_COMMIT", "desconocido"))
-    version_app: str = field(default_factory=lambda: os.getenv("VERSION_APP", "app-v1.0.0"))
+    version_app: str = field(default_factory=lambda: os.getenv("VERSION_APP", "app-v2.0.0"))
 
 
 def cargar() -> Configuracion:

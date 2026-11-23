@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from datetime import date
 
 import pytest
@@ -26,8 +27,25 @@ def test_salud_reporta_versiones(api):
     s = r.json()
     assert s["estado"] == "ok"
     assert s["ordenes_sap_simulado"] > 0
-    assert s["modelos_entrega"]["version"] == "model-v1.0.0"
+    # La API debe reportar la versión que está en disco (el pipeline de CT puede cambiarla: model-v1.x.0)
+    meta = json.loads((Path(__file__).resolve().parents[1] / "modelos" / "metadatos_modelos.json").read_text("utf-8"))
+    assert s["modelos_entrega"]["version"] == meta["version_modelos"]
+    assert s["modelos_entrega"]["desfase_rango_dias"] == meta["eta"].get("desfase_rango_dias", 0)
     assert "X-Tiempo-ms" in r.headers
+
+
+def test_metricas_prometheus(api):
+    """Fase 3: /metrics expone métricas de servicio y de modelo sin datos personales."""
+    api.post("/api/chat", json={"mensaje": "¿cuándo llega mi pedido?"}, headers={"Authorization": "Bearer demo-arm01"})
+    r = api.get("/metrics")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    texto = r.text
+    for metrica in ("cab_solicitudes_total", "cab_latencia_segundos_bucket", "cab_decisiones_router_total",
+                    "cab_confianza_router_bucket", "cab_info"):
+        assert metrica in texto, metrica
+    assert 'ruta="/api/chat"' in texto
+    assert "cuándo llega" not in texto  # nunca el texto del mensaje (LFPDPPP)
+    assert 'ruta="/metrics"' not in texto  # la recolección no se cuenta a sí misma
 
 
 @pytest.mark.parametrize("mensaje", ["", "   ", "x" * 1001])

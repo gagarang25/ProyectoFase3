@@ -49,9 +49,13 @@ class ModelosEntrega:
         self.entradas: list[str] = self.meta["entradas"]
         self.categorias: dict[str, list] = self.meta["categoricas"]
         self.rangos: dict[str, list[float]] = self.meta["rangos_numericos_entrenamiento"]
+        # Fase 3: el reentrenamiento continuo (RB-02 de la A8) puede ensanchar el rango k días para mantener la
+        # cobertura ≥ 85 % (calibración conformal simple). model-v1.0.0 no lo usa (k = 0).
+        self.desfase_rango = int(self.meta["eta"].get("desfase_rango_dias", 0))
 
     def info(self) -> dict:
         return {"version": self.meta["version_modelos"], "datos": self.meta["version_datos"],
+                "desfase_rango_dias": self.desfase_rango,
                 "eta_mae_prueba": round(self.meta["eta"]["metricas_prueba"]["mae_dias"], 3),
                 "riesgo_auc_prueba": round(self.meta["riesgo_retraso"]["metricas_prueba"]["auc"], 3),
                 "umbral_riesgo": self.umbral_riesgo}
@@ -102,8 +106,9 @@ class ModelosEntrega:
         X = X.astype({c: "float64" for c in self.rangos})  # None → NaN (lo imputa el modelo)
         mediana = float(self.eta.predict(X)[0])
         eta_dias = max(1, int(round(mediana)))
-        eta_min = max(1, int(round(min(float(self.eta_inf.predict(X)[0]), mediana))))
-        eta_max = max(eta_dias, int(round(max(float(self.eta_sup.predict(X)[0]), mediana))))
+        k = self.desfase_rango
+        eta_min = max(1, int(round(min(float(self.eta_inf.predict(X)[0]), mediana))) - k)
+        eta_max = max(eta_dias, int(round(max(float(self.eta_sup.predict(X)[0]), mediana))) + k)
         p = float(self.riesgo.predict_proba(X)[0, 1])
         est = EstimacionEntrega(eta_dias=eta_dias, eta_min_dias=eta_min, eta_max_dias=eta_max,
                                 prob_retraso=round(p, 4), riesgo_alto=p >= self.umbral_riesgo,
