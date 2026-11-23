@@ -10,7 +10,7 @@ resources:
 images:
   - name: cab-chatbot-api
     newName: ghcr.io/gagarang25/proyectofase3-api
-    newTag: pendiente
+    newTag: sha-1f32a60
 replicas:
   - name: cab-chatbot-api
     count: 2
