@@ -43,6 +43,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TOKENIZERS_PARALLELISM=false
 
 WORKDIR /app
+# Iteración 2 (seguridad): el escaneo de la ejecución CI #1 encontró 254 vulnerabilidades conocidas (0 críticas,
+# 84 altas) y 49 ya tenían parche. Se aplican los parches del sistema operativo y se actualiza pip antes de instalar.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/* \
+ && pip install --upgrade pip
 COPY backend/requirements.txt .
 RUN pip install -r requirements.txt
 

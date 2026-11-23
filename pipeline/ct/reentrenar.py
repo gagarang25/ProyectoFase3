@@ -182,7 +182,8 @@ def main() -> None:
     medido, motivos = disparadores(campeon, lote, historico, corte, cfg, meta)
     rep.extra = {"corte": str(corte.date()), "lote": lote_rel, "version_lote": manifiesto["version"],
                  "disparadores": {"medido": medido, "motivos": motivos}}
-    rep.agregar("disparadores", True, "; ".join(motivos) if motivos else "ninguno (modelo estable)", nivel="aviso",
+    # Un disparador activo es un AVISO (se ve en amarillo): no detiene el pipeline, inicia el reentrenamiento.
+    rep.agregar("disparadores", not motivos, "; ".join(motivos) if motivos else "ninguno (modelo estable)", nivel="aviso",
                 valor=len(motivos), umbral=0)
     if a.solo_diagnostico:
         rep.paso = f"Monitoreo del modelo en producción ({meta['version_modelos']}, corte {corte.date()})"

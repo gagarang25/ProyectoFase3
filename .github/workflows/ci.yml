@@ -194,9 +194,11 @@ jobs:
           fail-build: false              # se reporta y se audita; el criterio de bloqueo está en la auditoría
           severity-cutoff: critical
           output-format: json
-      - name: Guardar el escaneo
+      - name: Guardar el escaneo y resumirlo por severidad, tipo y paquete
         if: always()
-        run: cp "${{ steps.escaneo.outputs.json }}" reportes/vulnerabilidades.json || true
+        run: |
+          cp "${{ steps.escaneo.outputs.json }}" reportes/vulnerabilidades.json || exit 0
+          python3 pipeline/resumir_vulnerabilidades.py reportes/vulnerabilidades.json >> "$GITHUB_STEP_SUMMARY"
       - name: Publicar en GitHub Container Registry (solo main)
         id: publicar
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
