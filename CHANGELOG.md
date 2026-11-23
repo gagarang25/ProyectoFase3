@@ -1,5 +1,24 @@
 # Registro de cambios
 
+## pipeline-v1.0.0 · Proyecto Fase 3 (pipeline MLOps/GitOps)
+- `.github/workflows/`: CI (`ci.yml`), CD GitOps con Argo CD (`cd-gitops.yml`), promoción a producción por PR
+  (`promover.yml`), monitoreo semanal (`monitoreo.yml`), entrenamiento continuo (`ct.yml`) y releases (`release.yml`).
+- `pipeline/`: compuertas de datos (contratos, SHA-256, fuga, drift) y de modelos (desempeño, reproducibilidad,
+  equidad por transportista), registro de auditoría, tarjeta del modelo y entrenamiento continuo champion/challenger
+  con MLflow. Umbrales en `pipeline/config/pipeline.yaml`.
+- `gitops/`: manifiestos de Kubernetes con Kustomize (staging y producción con HPA 2–4 y PDB) y aplicaciones de Argo CD.
+- Pruebas del propio pipeline: datos corruptos a propósito y ausencia de *training-serving skew*.
+- Análisis estático con ruff (`ruff.toml`); correcciones menores de importaciones en `monitoreo/` y `optimizacion/`.
+
+## app-v2.0.0 · Proyecto Fase 3 (API optimizada y observable)
+- Router con ONNX Runtime y embeddings INT8 (optimización de la A9) generado dentro del `docker build` con compuerta
+  de equivalencia 560/560 frente a PyTorch. Imagen sin PyTorch; `Dockerfile.pytorch` conserva la de la Fase 2.
+- `GET /metrics` (Prometheus): solicitudes, latencia, decisiones del router, confianza, ETA y probabilidad de retraso.
+- El rango del ETA admite el ensanchamiento calibrado del reentrenamiento (`desfase_rango_dias`; 0 en model-v1.0.0).
+- El saludo del chat aclara que es un sistema de IA (transparencia, hallazgo L1 de la A9).
+- Pruebas: `/metrics`, versión de modelos leída de los metadatos, pruebas del modelo real con cualquier runtime;
+  pruebas de aceptación con modo `--estricto` (36 casos, router 160/160, p95 ≤ 400 ms).
+
 ## opt-v1.0.0 · Actividad 9 (escalamiento eficiente y responsable)
 - Carpeta `optimizacion/`: exportación a ONNX, 5 variantes del router y compuertas de calidad/equidad (Q1–Q4, D1).
 - Variante elegida: ONNX Runtime con embeddings INT8 (mismas 560 decisiones; p95 −69 %, memoria −46 %). INT8 completo rechazado.

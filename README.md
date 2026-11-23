@@ -1,22 +1,78 @@
-# Chatbot de estatus de órdenes y ETA · CAB (Proyecto Fase 2)
+# Chatbot de estatus de órdenes y ETA · CAB (Proyecto Fase 3)
 
 **Maestría en Inteligencia Artificial · Gestión de proyectos de inteligencia artificial**
 T07175241 · Gabriel Alejandro García Ángeles
 
-Solución técnica completa y desplegable del prototipo definido en la Fase 1: un chatbot para que los
-clientes B2B de **Componentes Automotrices del Bajío (CAB)**, una empresa ficticia, consulten el estatus de
-sus órdenes de compra y la fecha estimada de entrega. Integra en una API los modelos construidos en las
-actividades anteriores, los empaqueta con Docker y queda listo para desplegarse en la nube.
+[![CI](https://github.com/gagarang25/ProyectoFase3/actions/workflows/ci.yml/badge.svg)](https://github.com/gagarang25/ProyectoFase3/actions/workflows/ci.yml)
+[![CD GitOps](https://github.com/gagarang25/ProyectoFase3/actions/workflows/cd-gitops.yml/badge.svg)](https://github.com/gagarang25/ProyectoFase3/actions/workflows/cd-gitops.yml)
 
-| Componente | Origen | Qué hace |
+La Fase 3 convierte el prototipo de la Fase 2 (y el monitoreo y la optimización de las actividades 8 y 9) en una
+solución **lista para operar**: cada cambio pasa por un pipeline automatizado de MLOps/GitOps con integración
+continua, pruebas de código, datos y modelos, versionado de modelos y artefactos, despliegue continuo con Argo CD,
+monitoreo, auditoría y reentrenamiento controlado. Historial completo de las fases anteriores en este mismo
+repositorio (etiquetas `code-v1.0.0` … `opt-v1.0.0`).
+
+> Todos los datos son simulados y CAB es una empresa ficticia. Es un proyecto académico.
+
+## Pipeline de un vistazo
+
+```mermaid
+flowchart LR
+  dev[Commit / PR] --> CI
+  subgraph CI[CI · ci.yml]
+    L[ruff] & T[pytest 82] & D[pruebas de datos] --> M[pruebas de modelos]
+    M --> B[docker build<br/>compuerta ONNX 560/560]
+    B --> A[aceptación 36 casos<br/>p95 ≤ 400 ms] --> S[SBOM + Grype] --> AU[auditoría +<br/>tarjeta del modelo]
+  end
+  AU -->|push GHCR sha-xxxxxxx| G1[gitops/overlays/staging<br/>commit del bot]
+  G1 --> CD1[Argo CD · staging<br/>kind]
+  CD1 --> P[Promover a producción<br/>PR aprobado]
+  P --> CD2[Argo CD · producción<br/>HPA 2–4]
+  MON[monitoreo.yml<br/>lunes] -->|MAE / PSI / rango| CT[ct.yml<br/>champion vs challenger]
+  CT -->|PR modelo nuevo| CI
+  TAG[git tag] --> R[release.yml<br/>imagen semver + release]
+```
+
+| Workflow | Disparador | Qué hace |
 |---|---|---|
-| Router de intención (mDeBERTa-v3 ajustado) | A4 + data-v3.0.0 (Fase 2) | Entiende el mensaje en español o inglés y decide: responder, preguntar o escalar |
-| Modelo de ETA (regresión con rango) | Nuevo en la Fase 2 | Estima en cuántos días llega la orden, con rango y motivos |
-| Clasificador de riesgo de retraso | A6 (gradient boosting, umbral 0.17) | Marca órdenes con probabilidad alta de llegar tarde |
-| SAP simulado (solo lectura) | Datos del piloto de la A6 | Estatus de las órdenes, siempre filtrado por cliente |
-| API REST (FastAPI) + chat web (nginx) | Nuevo en la Fase 2 | Integración backend–frontend |
+| `ci.yml` | push / PR a `main` | Lint, 82 pruebas, pruebas de datos y modelos, imagen, aceptación, SBOM, escaneo, auditoría; en `main` publica la imagen y actualiza staging por GitOps |
+| `cd-gitops.yml` | lo llama CI (staging) · PR fusionado en `gitops/overlays/produccion` | Crea un clúster kind, instala Argo CD, registra la aplicación en la revisión aprobada, espera *Synced/Healthy*, pruebas de humo y *self-heal* |
+| `promover.yml` | manual | Propone por PR que producción use la imagen de staging |
+| `monitoreo.yml` | lunes 07:17 (CDMX) · manual | MAE del modelo con entregas recientes + drift; si hay alerta lanza CT |
+| `ct.yml` | manual · lo lanza el monitoreo | Ingesta del lote, pruebas de datos, challenger, compuertas, MLflow y PR del modelo nuevo |
+| `release.yml` | etiqueta `app-v*`, `model-v*`, `pipeline-v*` | Etiqueta semántica de la imagen en GHCR y release con tarjeta del modelo y auditoría |
 
-> Todos los datos son simulados. Es un prototipo académico, no un sistema en producción.
+Umbrales de todas las compuertas: `pipeline/config/pipeline.yaml`. Detalle del pipeline: `pipeline/README.md`.
+
+## Qué cambió respecto a la Fase 2
+
+- **API app-v2.0.0**: el router se sirve con ONNX Runtime y embeddings INT8 (variante elegida en la A9). El ONNX se
+  genera dentro del `docker build` desde `model-v1.0.0` de Hugging Face y solo se acepta si sus acciones son
+  idénticas a las de PyTorch en 560 mensajes. La imagen ya no incluye PyTorch (`Dockerfile.pytorch` conserva la
+  versión anterior).
+- **`/metrics`** en formato Prometheus: solicitudes, latencia, decisiones del router, confianza, ETA y riesgo.
+- **Transparencia** (hallazgo L1 de la A9): el saludo del chat aclara que es un sistema de IA.
+- **Pruebas de datos y de modelos** como compuertas automáticas; **pruebas del pipeline** que comprueban que las
+  compuertas sí detectan datos corruptos y que el pipeline calcula el ETA igual que la API (sin *training-serving skew*).
+- **GitOps** (`gitops/`): Kubernetes con Kustomize (staging y producción) y Argo CD.
+- **Entrenamiento continuo** del ETA con el runbook RB-02 de la A8, registro en MLflow y promoción por PR.
+
+## Ejecutar localmente
+
+```bash
+docker build -t cab-chatbot-api:2.0.0 --build-arg GIT_COMMIT=$(git rev-parse HEAD) .
+docker run --rm -p 8000:8000 cab-chatbot-api:2.0.0             # chat en http://localhost:8000
+python pruebas/pruebas_funcionales.py --url http://localhost:8000 --estricto
+
+# Compuertas del pipeline sin Docker (Python 3.12)
+pip install -r backend/requirements.txt -r monitoreo/requirements.txt
+python pipeline/validar_datos.py && python pipeline/evaluar_modelos.py
+python -m pytest backend/tests monitoreo/tests pipeline/tests
+```
+
+---
+
+# Base de la Fase 2
 
 ## Arquitectura
 
