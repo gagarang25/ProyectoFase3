@@ -1,0 +1,45 @@
+# Contrato de datos de entregas (data-v1.x). Lo que el modelo de ETA y el de riesgo esperan recibir.
+# Rangos "duros": un valor fuera de ellos es un error de datos (el pipeline se detiene).
+# Los rangos de entrenamiento (más estrechos) se vigilan como drift, no como error.
+nombre: entregas_cab
+archivos: [datos/entregas/entregas_cab.csv, datos/entregas/piloto_ab_cab.csv]
+llave: id_orden
+patron_llave: "^OC-45\\d{8}$"
+fechas: [fecha_pedido, fecha_compromiso, fecha_entrega_real]
+columnas:
+  id_orden:            {tipo: texto, nulos_max: 0}
+  cliente:             {tipo: texto, nulos_max: 0, patron: "^(ARM|TIER)-\\d{2}$"}
+  tipo_cliente:        {tipo: categoria, valores: [armadora, tier1]}
+  planta:              {tipo: categoria, valores: [Celaya, Queretaro, San Juan del Rio]}
+  region_destino:      {tipo: categoria, valores: [Bajio, Centro, EE.UU., Noreste, Norte]}
+  transportista:       {tipo: categoria, valores: [TR-A, TR-B, TR-C, TR-D, TR-E]}
+  modalidad:           {tipo: categoria, valores: [Consolidado, Dedicado, Paqueteria]}
+  familia_producto:    {tipo: categoria, valores: [Arneses, Ensambles, Estampados, Maquinados, Plasticos inyectados]}
+  cruce_frontera:      {tipo: entero, min: 0, max: 1}
+  distancia_km:        {tipo: numero, min: 1, max: 5000}
+  cantidad_piezas:     {tipo: entero, min: 1, max: 100000}
+  peso_kg:             {tipo: numero, min: 0.1, max: 100000}
+  inventario_disponible: {tipo: entero, min: 0, max: 1}
+  utilizacion_planta:  {tipo: numero, min: 0.30, max: 1.30}
+  pedido_urgente:      {tipo: entero, min: 0, max: 1}
+  cambios_pedido:      {tipo: entero, min: 0, max: 10}
+  produccion_std_dias: {tipo: entero, min: 0, max: 30}
+  transito_std_dias:   {tipo: entero, min: 1, max: 30}
+  dias_comprometidos:  {tipo: entero, min: 1, max: 60}
+  holgura_dias:        {tipo: entero, min: -10, max: 30}
+  dias_reales:         {tipo: entero, min: 1, max: 90}
+  dias_retraso:        {tipo: entero, min: 0, max: 90}
+  retraso:             {tipo: entero, min: 0, max: 1}
+  mes:                 {tipo: entero, min: 1, max: 12}
+  dia_semana:          {tipo: entero, min: 0, max: 6}
+  envios_previos_ruta: {tipo: entero, min: 0, max: 100000}
+  tasa_retraso_transportista_90d: {tipo: numero, min: 0, max: 1, nulos_max: 0.05}   # A6: 1.2 % sin historia
+reglas:                                  # coherencia entre columnas (evitan etiquetas corruptas)
+  - nombre: retraso_coherente
+    descripcion: "retraso = 1 si y solo si dias_retraso > 0"
+  - nombre: dias_retraso_coherente
+    descripcion: "dias_retraso = max(0, dias_reales - dias_comprometidos)"
+  - nombre: entrega_despues_del_pedido
+    descripcion: "fecha_entrega_real > fecha_pedido"
+  - nombre: tasa_retraso_plausible
+    descripcion: "la tasa de retraso del archivo está entre 10 % y 40 % (A6: 22.8 %)"

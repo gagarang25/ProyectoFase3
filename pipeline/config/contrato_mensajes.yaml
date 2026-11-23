@@ -1,0 +1,11 @@
+# Contrato de datos de mensajes del router (data-v3.x).
+nombre: mensajes_cab
+clases: [estatus_orden, fecha_entrega, queja, contactar_ejecutivo, otro]
+idiomas: [es, en, mix]
+largo_min: 2
+largo_max: 400
+divisiones: [entrenamiento.csv, validacion.csv, prueba.csv]
+externa: prueba_externa_v3.csv
+proporcion_minima_clase: 0.10            # ninguna clase con menos de 10 % en entrenamiento (desbalance)
+proporcion_minima_espanol: 0.30          # retroalimentación A4/A5: el español debe estar representado
+fuga_permitida: 0                        # ningún mensaje de prueba puede estar idéntico en entrenamiento

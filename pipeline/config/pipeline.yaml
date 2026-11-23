@@ -1,0 +1,83 @@
+# =============================================================================
+# Configuración del pipeline MLOps/GitOps · Chatbot de CAB (Proyecto Fase 3)
+#
+# Una sola fuente para todas las compuertas (quality gates) del pipeline. Cambiar un umbral es un
+# commit revisable en Git, no un cambio de código. Cada umbral indica de dónde sale.
+# =============================================================================
+version_config: "pipeline-v1.0.0"
+
+versiones:
+  app: "app-v2.0.0"
+  router: "model-v1.0.0"                 # Hugging Face Hub: gagarang/router-intencion-cab-mdeberta
+  repositorio_router: "gagarang/router-intencion-cab-mdeberta"
+
+# -----------------------------------------------------------------------------
+# Compuertas de DATOS (pipeline/validar_datos.py). Contratos en contrato_*.yaml
+# -----------------------------------------------------------------------------
+datos:
+  manifiestos:                            # SHA-256 de cada archivo versionado: detectan cambios no registrados
+    - datos/entregas/versiones.json
+    - datos/mensajes_cab/versiones.json
+  psi_alerta: 0.25                        # A8: PSI > 0.25 = cambio importante en la distribución
+  psi_aviso: 0.10
+  fuera_de_rango_max: 0.05                # A8: más de 5 % de órdenes fuera del rango de entrenamiento = alerta
+
+# -----------------------------------------------------------------------------
+# Compuertas de MODELOS tabulares (pipeline/evaluar_modelos.py)
+# Se evalúan con el conjunto de prueba temporal (pedidos desde el 01/05/2026), que ningún modelo ve al entrenar.
+# -----------------------------------------------------------------------------
+modelos:
+  corte_prueba: "2026-05-01"
+  eta:
+    mae_max: 1.30                         # SLO de la A8 (1.05 de la Fase 2 + 25 % de degradación tolerada)
+    cobertura_min: 0.85                   # KPI de R08 (Fase 1): ≥ 85 % de entregas dentro del rango informado
+    mejora_vs_sap_min: 0.25               # el modelo debe mejorar al menos 25 % a la fecha de SAP (Fase 2: 39 %)
+  riesgo:
+    auc_min: 0.80                         # A6: AUC de validación cruzada 0.818
+    recall_min: 0.78                      # A6: objetivo 0.80, medido 0.798 → tolerancia de 2 puntos
+    precision_min: 0.38
+  equidad:                                # A9 (Tema 22): auditoría por segmento
+    variable: transportista
+    recall_segmento_min: 0.65             # A9: TR-A 0.698 era el segmento más bajo; alerta si baja de 0.65
+    brecha_mae_segmento_max: 0.60         # diferencia máxima de MAE entre transportistas (días)
+  reproducibilidad_tolerancia: 0.000001   # las métricas recalculadas deben coincidir con metadatos_modelos.json
+
+# -----------------------------------------------------------------------------
+# Compuertas del ROUTER y del SERVICIO (Docker build + pruebas de aceptación)
+# -----------------------------------------------------------------------------
+router:
+  equivalencia_onnx: "560/560"            # A9: acciones idénticas a PyTorch (se verifica dentro del docker build)
+  accuracy_externa_min: 0.95              # Fase 2: 0.964 en 160 mensajes escritos a mano
+  automaticas_erroneas_max: 6             # Fase 2: 6 respuestas automáticas erróneas (no debe empeorar)
+servicio:
+  p95_ms_max: 400                         # SLO de latencia de la A8
+  casos_funcionales: "todos"              # 36 casos funcionales y extremos
+  imagen_mb_max: 2500                     # la imagen de la Fase 2 pesaba 4,370 MB descomprimida
+
+# -----------------------------------------------------------------------------
+# Entrenamiento continuo (CT): champion / challenger (pipeline/ct/)
+# -----------------------------------------------------------------------------
+ct:
+  disparadores:                           # cualquiera inicia un reentrenamiento
+    mae_reciente_max: 1.30                # alerta A5 de la A8
+    psi_max: 0.25                         # drift importante en una variable de entrada
+    fuera_de_rango_max: 0.05
+  inicio_produccion: "2026-10-01"         # órdenes posteriores a data-v1.0.0 (A6)
+  peso_reciente: 10.0                     # A8 (RB-02): las órdenes recientes pesan 10 veces más
+  cobertura_meta: 0.87                    # calibración del rango: 85 % del KPI + 2 puntos de margen
+  semanas_validacion: 1                   # el challenger se valida con la última semana entregada (no la ve al entrenar)
+  promocion:
+    mejora_mae_min: 0.05                  # el challenger debe bajar el MAE reciente al menos 0.05 días
+    mae_prueba_historica_max: 1.30        # y no romper el SLO en el periodo histórico (no "olvidar")
+    cobertura_reciente_min: 0.85
+  aprobacion: "pull request revisado por el dueño del modelo (GitOps)"
+
+# -----------------------------------------------------------------------------
+# GitOps
+# -----------------------------------------------------------------------------
+gitops:
+  registro_imagen: "ghcr.io"
+  entornos: [staging, produccion]
+  promocion_staging: "automática al pasar CI en main"
+  promocion_produccion: "pull request aprobado (workflow promover.yml)"
+  argocd_version: "v3.6.2"

@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -483,7 +483,7 @@ def generar_tablero(ruta, ventanas, alertas, motor, cap, sim, cfg, ahora) -> Non
     S = tablero.semaforo
     tiles = [
         {"capa": "Servicio · síntoma", "titulo": "Disponibilidad (5 min)", "valor": f"{u['disponibilidad']:.2%}",
-         "slo": f"SLO ≥ 99.5 % · presupuesto 28 d: " + (f"restante {u['presupuesto_disp_restante']:.0%}"
+         "slo": "SLO ≥ 99.5 % · presupuesto 28 d: " + (f"restante {u['presupuesto_disp_restante']:.0%}"
                 if u['presupuesto_disp_restante'] > 0 else f"AGOTADO (consumo {1 - u['presupuesto_disp_restante']:.0%})"),
          "color": S(u["disponibilidad"], 0.995, 0.999, "min"), "x": x,
          "series": [{"y": list(t["disponibilidad"] * 100), "nombre": "disponibilidad %"},

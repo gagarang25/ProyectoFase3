@@ -148,9 +148,9 @@ def main() -> None:
 
             # ---------------------------------------------------- SLI de calidad (con etiquetas)
             q, q_v1, q_sin = calidad(g), calidad(g_v1), calidad(g_sin)
-            seg = {f"mae_requiere_produccion": float((g.loc[g["inventario_disponible"] == 0, "eta"]
+            seg = {"mae_requiere_produccion": float((g.loc[g["inventario_disponible"] == 0, "eta"]
                                                        - g.loc[g["inventario_disponible"] == 0, "dias_reales"]).abs().mean()),
-                   f"mae_con_inventario": float((g.loc[g["inventario_disponible"] == 1, "eta"]
+                   "mae_con_inventario": float((g.loc[g["inventario_disponible"] == 1, "eta"]
                                                  - g.loc[g["inventario_disponible"] == 1, "dias_reales"]).abs().mean())}
             filas_4s = filas[-3:] + [{"entregas": q["entregas"], "fuera_rango": q["fuera_rango"]}]
             ent_4s, fuera_4s = sum(f["entregas"] for f in filas_4s), sum(f["fuera_rango"] for f in filas_4s)
@@ -207,7 +207,7 @@ def main() -> None:
                             f"> {UMBRAL_CARGA}; carga media {m['utilizacion_media']:.2f} (antes ~0.80); KS {m['ks_utilizacion']:.2f}",
                             "motor de alertas", "alerts.json, drift_por_variable.csv")
                     rb.paso(ts, "diagnostico", "¿Es drift real o error de ingestión? Revisar nulos, esquema y "
-                            "contrastar la carga con el plan de producción", f"0 nulos en las 22 entradas; esquema sin "
+                            "contrastar la carga con el plan de producción", "0 nulos en las 22 entradas; esquema sin "
                             "cambios; Planeación confirma arranque del programa de ARM-03 y temporada alta → drift real",
                             "especialista MLOps", "monitoring_log.jsonl (nulos_entrada)")
                     rb.paso(ts, "diagnostico", "¿Cambió algo más? PSI/KS en numéricas y JSD/χ² en categóricas",

@@ -15,3 +15,7 @@ backend/modelo_router/
 
 # Actividad 9: modelos ONNX (pesados, se regeneran con optimizacion/ejecutar_todo.sh)
 optimizacion/modelos_onnx/*.onnx
+
+# Fase 3: salidas del pipeline (se publican como artefactos de GitHub Actions, no en Git)
+pipeline/reportes/
+pipeline/mlflow/

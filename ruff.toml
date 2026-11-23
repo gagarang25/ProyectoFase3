@@ -1,0 +1,16 @@
+# Análisis estático del código (job "calidad-codigo" del pipeline de CI).
+line-length = 150
+target-version = "py312"
+extend-exclude = ["*.ipynb", ".venv*", "salida_router"]
+
+[lint]
+select = ["E", "F", "W"]
+
+[lint.per-file-ignores]
+"optimizacion/src/simular_autoescalado.py" = ["E741"]
+# Plantillas de texto (respuestas del chatbot, tarjeta del modelo): se dejan en una línea para leerlas completas.
+"backend/app/respuestas.py" = ["E501"]
+"entrenamiento/publicar_modelo_hf.py" = ["E501"]
+"monitoreo/src/obs/telemetria.py" = ["E501"]
+"monitoreo/src/simular_game_day.py" = ["E501"]
+"optimizacion/src/exportar_onnx.py" = ["E501"]
