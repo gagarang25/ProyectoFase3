@@ -1,0 +1,26 @@
+# Aplicación de Argo CD: observa gitops/overlays/staging en GitHub y mantiene el clúster igual a lo que dice Git.
+# selfHeal: si alguien cambia algo a mano en el clúster, Argo CD lo regresa al estado de Git.
+# prune: lo que se borra de Git se borra del clúster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cab-chatbot-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/gagarang25/ProyectoFase3.git
+    targetRevision: main
+    path: gitops/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cab-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff: {duration: 10s, factor: 2, maxDuration: 2m}

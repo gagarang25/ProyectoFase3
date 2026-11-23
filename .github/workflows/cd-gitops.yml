@@ -1,0 +1,172 @@
+# =============================================================================
+# CD · Despliegue continuo con GitOps (Argo CD) en un clúster de Kubernetes efímero (kind)
+#
+# Principio GitOps: el pipeline NO ejecuta "kubectl apply" de la aplicación. Solo registra en Argo CD qué
+# carpeta de Git observar; Argo CD lee gitops/overlays/<entorno> en la revisión indicada y lleva el clúster a
+# ese estado (pull). Cambiar lo que corre en un entorno = hacer un commit; revertir = git revert.
+#
+# El clúster se crea en el runner de GitHub (kind = Kubernetes dentro de Docker) porque el proyecto no contrata
+# infraestructura (Fase 2). El mismo Application de Argo CD funciona en EKS, AKS o GKE sin cambios.
+#
+# Se dispara:
+#   · desde ci.yml (staging), después de que el bot fija la imagen nueva en gitops/overlays/staging;
+#   · al aprobar el PR que cambia gitops/overlays/produccion (producción);
+#   · manualmente (workflow_dispatch).
+# =============================================================================
+name: CD GitOps
+
+on:
+  workflow_call:
+    inputs:
+      entorno: {type: string, required: true}
+      revision: {type: string, required: true}
+  push:
+    branches: [main]
+    paths: ["gitops/overlays/produccion/**"]
+  workflow_dispatch:
+    inputs:
+      entorno:
+        type: choice
+        options: [staging, produccion]
+        default: staging
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: cd-${{ inputs.entorno || 'produccion' }}
+  cancel-in-progress: false
+
+jobs:
+  desplegar:
+    name: Argo CD sincroniza ${{ inputs.entorno || 'produccion' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: ${{ inputs.entorno || 'produccion' }}
+    env:
+      ENTORNO: ${{ inputs.entorno || 'produccion' }}
+      REVISION: ${{ inputs.revision || github.sha }}
+      ARGOCD_VERSION: v3.6.2
+      EVID: evidencias-cd
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ inputs.revision || github.sha }}"}
+
+      - name: Imagen declarada en Git para el entorno
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_ENV"
+          import os, yaml
+          k = yaml.safe_load(open(f"gitops/overlays/{os.environ['ENTORNO']}/kustomization.yaml"))
+          img = k["images"][0]
+          assert img["newTag"] != "pendiente", "El entorno todavía no tiene una imagen aprobada"
+          print(f"IMAGEN_REF={img['newName']}:{img['newTag']}")
+          EOF
+          mkdir -p $EVID
+
+      - name: Descargar la imagen aprobada (GHCR)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$IMAGEN_REF"
+          docker image inspect "$IMAGEN_REF" --format '{{index .RepoDigests 0}}' | tee $EVID/digest.txt
+
+      - name: Crear clúster de Kubernetes (kind)
+        uses: helm/kind-action@v1
+        with: {cluster_name: cab}
+
+      - name: Cargar la imagen en el nodo (equivale a que el clúster la descargue del registro)
+        run: kind load docker-image "$IMAGEN_REF" --name cab
+
+      - name: Instalar Argo CD ${{ env.ARGOCD_VERSION }}
+        run: |
+          kubectl create namespace argocd
+          kubectl apply -n argocd --server-side --force-conflicts \
+            -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml
+          kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=300s
+          kubectl -n argocd rollout status deploy/argocd-redis --timeout=300s
+          kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+
+      - name: Servidor de métricas (para el autoescalado de producción)
+        if: env.ENTORNO == 'produccion'
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+          kubectl -n kube-system patch deployment metrics-server --type=json \
+            -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
+      - name: Registrar la aplicación en Argo CD (observa Git en la revisión aprobada)
+        run: |
+          sed "s/targetRevision: main/targetRevision: ${REVISION}/" gitops/argocd/app-${ENTORNO}.yaml > app.yaml
+          cat app.yaml
+          kubectl apply -f app.yaml
+          date -u +%s > inicio_sync.txt
+
+      - name: Esperar la sincronización (Synced + Healthy)
+        run: |
+          APP=cab-chatbot-${ENTORNO}
+          for i in $(seq 1 90); do
+            ESTADO=$(kubectl -n argocd get application $APP -o jsonpath='{.status.sync.status} {.status.health.status} {.status.sync.revision}' 2>/dev/null || true)
+            echo "$(date -u +%H:%M:%S) $ESTADO"
+            set -- $ESTADO
+            if [ "$1" = "Synced" ] && [ "$2" = "Healthy" ] && [ "$3" = "$REVISION" ]; then break; fi
+            sleep 10
+          done
+          kubectl -n argocd get application $APP -o yaml > $EVID/application.yaml
+          test "$1" = "Synced" && test "$2" = "Healthy"
+          echo "SEGUNDOS_SYNC=$(( $(date -u +%s) - $(cat inicio_sync.txt) ))" >> "$GITHUB_ENV"
+          kubectl -n cab-${ENTORNO} rollout status deploy/cab-chatbot-api --timeout=300s
+
+      - name: Estado del clúster (evidencia)
+        if: always()
+        run: |
+          {
+            echo "## Argo CD"; kubectl -n argocd get applications -o wide
+            echo; echo "## Recursos en cab-${ENTORNO}"; kubectl -n cab-${ENTORNO} get all,configmap,hpa,pdb -o wide
+            echo; echo "## Pods (imagen y estado)"; kubectl -n cab-${ENTORNO} get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\t"}{.status.phase}{"\n"}{end}'
+            echo; echo "## Eventos"; kubectl -n cab-${ENTORNO} get events --sort-by=.lastTimestamp | tail -n 25
+          } | tee $EVID/cluster.txt
+          kubectl -n argocd get application cab-chatbot-${ENTORNO} -o jsonpath='{range .status.resources[*]}{.kind}{"\t"}{.name}{"\t"}{.status}{"\t"}{.health.status}{"\n"}{end}' | tee $EVID/recursos_argocd.txt || true
+
+      - name: Pruebas de humo en el clúster (a través del Service de Kubernetes)
+        run: |
+          kubectl -n cab-${ENTORNO} port-forward svc/cab-chatbot-api 8080:80 > pf.log 2>&1 &
+          sleep 5
+          curl -fs localhost:8080/api/salud | tee $EVID/salud.json | python3 -m json.tool
+          python3 pruebas/pruebas_funcionales.py --url http://localhost:8080 --latencia 50 --salida $EVID/humo --estricto
+          curl -fs localhost:8080/metrics > $EVID/metrics.txt
+          grep -E '^cab_info' $EVID/metrics.txt
+
+      - name: GitOps self-heal (alguien cambia la configuración a mano; Argo CD la regresa a lo que dice Git)
+        run: |
+          NS=cab-${ENTORNO}
+          kubectl -n $NS patch configmap cab-chatbot-config --type merge -p '{"data":{"UMBRAL_CONFIANZA":"0.50"}}'
+          INICIO=$(date -u +%s)
+          for i in $(seq 1 60); do
+            V=$(kubectl -n $NS get configmap cab-chatbot-config -o jsonpath='{.data.UMBRAL_CONFIANZA}')
+            [ "$V" = "0.90" ] && break
+            sleep 5
+          done
+          SEG=$(( $(date -u +%s) - INICIO ))
+          echo "Cambio manual UMBRAL_CONFIANZA=0.50 revertido a $V por Argo CD en ${SEG} s" | tee $EVID/self_heal.txt
+          test "$V" = "0.90"
+          echo "SEGUNDOS_SELFHEAL=$SEG" >> "$GITHUB_ENV"
+
+      - name: Resumen del despliegue
+        if: always()
+        run: |
+          {
+            echo "### ☸️ Despliegue GitOps · ${ENTORNO}"
+            echo ""
+            echo "| Dato | Valor |"
+            echo "|---|---|"
+            echo "| Revisión de Git | \`${REVISION:0:7}\` |"
+            echo "| Imagen | \`${IMAGEN_REF}\` |"
+            echo "| Argo CD | ${ARGOCD_VERSION} · sincronizado en ${SEGUNDOS_SYNC:-?} s |"
+            echo "| Self-heal | configuración restaurada en ${SEGUNDOS_SELFHEAL:-?} s |"
+            echo ""
+            [ -f $EVID/humo/resumen.md ] && cat $EVID/humo/resumen.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: "evidencias-cd-${{ env.ENTORNO }}", path: "${{ env.EVID }}/", retention-days: 90}

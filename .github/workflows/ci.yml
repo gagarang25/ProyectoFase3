@@ -1,0 +1,275 @@
+# =============================================================================
+# CI · Integración continua del chatbot de CAB (Proyecto Fase 3)
+#
+#  calidad-codigo ─┐
+#  pruebas-codigo ─┼─► imagen (build multi-etapa + compuerta ONNX + pruebas de aceptación + SBOM + escaneo)
+#  pruebas-datos ──┴─► pruebas-modelos ─┘                │
+#  manifiestos-gitops ───────────────────────────────────┤
+#                                                        ▼
+#                                     auditoria ─► gitops-staging (commit en Git) ─► despliegue-staging (Argo CD)
+#
+# En un pull request se ejecutan todas las pruebas, pero nada se publica ni se despliega.
+# En main, si todo pasa, la imagen se publica en GHCR y staging se actualiza por GitOps.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "evidencias/**"
+      - "**/*.md"
+      - "gitops/overlays/produccion/**"    # producción la despliega cd-gitops.yml
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  IMAGEN: ghcr.io/gagarang25/proyectofase3-api
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  calidad-codigo:
+    name: Calidad del código (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "${{ env.PYTHON_VERSION }}"}
+      - run: pip install ruff==0.17.6
+      - name: Análisis estático
+        run: ruff check --output-format github .
+
+  # ---------------------------------------------------------------------------
+  pruebas-codigo:
+    name: Pruebas de código (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            monitoreo/requirements.txt
+      - name: Dependencias (sin PyTorch)
+        run: pip install -r backend/requirements.txt -r monitoreo/requirements.txt pytest-cov
+      - name: Pruebas unitarias e integración (API con router simulado, monitoreo A8 y pipeline)
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p reportes
+          python -m pytest backend/tests monitoreo/tests pipeline/tests \
+            --junitxml=reportes/pytest.xml --cov=backend/app --cov=pipeline --cov-report=term --cov-report=xml:reportes/cobertura.xml \
+            | tee reportes_pytest.txt
+          echo "### 🧪 pytest" >> "$GITHUB_STEP_SUMMARY"
+          tail -n 3 reportes_pytest.txt | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: reportes-pytest, path: reportes/, retention-days: 30}
+
+  # ---------------------------------------------------------------------------
+  pruebas-datos:
+    name: Pruebas de datos (contratos, SHA-256, fuga)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: monitoreo/requirements.txt}
+      - run: pip install -r monitoreo/requirements.txt
+      - name: Validar datos versionados
+        run: python pipeline/validar_datos.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: reportes-datos, path: pipeline/reportes/, retention-days: 30}
+
+  # ---------------------------------------------------------------------------
+  pruebas-modelos:
+    name: Pruebas de modelos (compuertas, reproducibilidad, equidad)
+    needs: pruebas-datos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: monitoreo/requirements.txt}
+      - run: pip install -r monitoreo/requirements.txt
+      - name: Evaluar ETA y riesgo de retraso contra pipeline.yaml
+        run: python pipeline/evaluar_modelos.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: reportes-modelos, path: pipeline/reportes/, retention-days: 30}
+
+  # ---------------------------------------------------------------------------
+  manifiestos-gitops:
+    name: Manifiestos de Kubernetes (kustomize + kubeconform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Instalar kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Construir y validar cada entorno
+        run: |
+          for entorno in staging produccion; do
+            kubectl kustomize gitops/overlays/$entorno > $entorno.yaml
+            kubeconform -strict -summary $entorno.yaml
+          done
+          kubeconform -strict -summary -ignore-missing-schemas gitops/argocd/
+
+  # ---------------------------------------------------------------------------
+  imagen:
+    name: Imagen Docker (build, compuerta ONNX, aceptación, SBOM)
+    needs: [calidad-codigo, pruebas-codigo, pruebas-modelos, manifiestos-gitops]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      etiqueta: ${{ steps.meta.outputs.etiqueta }}
+      digest: ${{ steps.publicar.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: meta
+        name: Etiqueta inmutable (sha corto del commit)
+        run: echo "etiqueta=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - name: Construir (etapa exportador → compuerta de equivalencia ONNX 560/560 → etapa final)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            VERSION_APP=app-v2.0.0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Tamaño de la imagen (compuerta)
+        run: |
+          MB=$(docker image inspect ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }} --format '{{.Size}}' | awk '{printf "%.0f", $1/1000000}')
+          echo "IMAGEN_MB=$MB" >> "$GITHUB_ENV"
+          echo "### 📦 Imagen: $MB MB (límite 2,500; Fase 2 con PyTorch: 4,370)" >> "$GITHUB_STEP_SUMMARY"
+          test "$MB" -le 2500
+      - name: Pruebas dentro del contenedor (pytest con el router ONNX real)
+        run: docker run --rm ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }} python -m pytest -q tests
+      - name: Levantar el contenedor
+        run: |
+          docker run -d --name cab -p 8000:8000 ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }}
+          for i in $(seq 1 60); do curl -fs localhost:8000/api/salud > /dev/null && break; sleep 2; done
+          curl -fs localhost:8000/api/salud | python -m json.tool
+      - name: Pruebas de aceptación (36 casos, 160 mensajes, latencia p95 ≤ 400 ms)
+        run: |
+          python pruebas/pruebas_funcionales.py --url http://localhost:8000 --salida reportes/aceptacion --estricto
+          cat reportes/aceptacion/resumen.md >> "$GITHUB_STEP_SUMMARY"
+          curl -fs localhost:8000/metrics > reportes/aceptacion/metrics.txt
+          grep -q 'cab_decisiones_router_total' reportes/aceptacion/metrics.txt
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' cab | tee reportes/aceptacion/memoria.txt
+      - name: Registros del contenedor
+        if: always()
+        run: docker logs cab > reportes/contenedor.log 2>&1 || true
+      - name: Inventario de componentes (SBOM, SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }}
+          format: spdx-json
+          output-file: reportes/sbom-imagen.spdx.json
+          upload-artifact: false
+      - name: Escaneo de vulnerabilidades (Grype)
+        id: escaneo
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }}
+          fail-build: false              # se reporta y se audita; el criterio de bloqueo está en la auditoría
+          severity-cutoff: critical
+          output-format: json
+      - name: Guardar el escaneo
+        if: always()
+        run: cp "${{ steps.escaneo.outputs.json }}" reportes/vulnerabilidades.json || true
+      - name: Publicar en GitHub Container Registry (solo main)
+        id: publicar
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }}
+          DIGEST=$(docker image inspect ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }} --format '{{index .RepoDigests 0}}' | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "### 🚀 Publicada ${{ env.IMAGEN }}:${{ steps.meta.outputs.etiqueta }} ($DIGEST)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Datos para la auditoría
+        if: always()
+        run: |
+          mkdir -p reportes
+          echo "{\"imagen_mb\": ${IMAGEN_MB:-0}}" > reportes/imagen.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: reportes-imagen, path: reportes/, retention-days: 30}
+
+  # ---------------------------------------------------------------------------
+  auditoria:
+    name: Registro de auditoría y tarjeta del modelo
+    needs: imagen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "${{ env.PYTHON_VERSION }}"}
+      - run: pip install pyyaml
+      - uses: actions/download-artifact@v8
+        with: {pattern: reportes-*, path: artefactos}
+      - name: Registro de auditoría (decisión desplegable / bloqueado)
+        run: |
+          python pipeline/auditoria.py --reportes artefactos \
+            --imagen "${{ env.IMAGEN }}:${{ needs.imagen.outputs.etiqueta }}" \
+            --digest "${{ needs.imagen.outputs.digest }}" \
+            --imagen-mb "$(python -c "import json;print(json.load(open('artefactos/reportes-imagen/imagen.json'))['imagen_mb'])")"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: auditoria, path: pipeline/reportes/auditoria/, retention-days: 90}
+
+  # ---------------------------------------------------------------------------
+  gitops-staging:
+    name: GitOps · actualizar staging en Git
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [imagen, auditoria]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.commit.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fijar la imagen nueva en gitops/overlays/staging
+        id: commit
+        run: |
+          ETIQUETA=${{ needs.imagen.outputs.etiqueta }}
+          sed -i "s/^    newTag: .*/    newTag: ${ETIQUETA}/" gitops/overlays/staging/kustomization.yaml
+          git config user.name "cab-pipeline[bot]"
+          git config user.email "cab-pipeline@users.noreply.github.com"
+          git add gitops/overlays/staging/kustomization.yaml
+          git commit -m "gitops(staging): cab-chatbot-api ${ETIQUETA}" \
+                     -m "Imagen ${{ env.IMAGEN }}@${{ needs.imagen.outputs.digest }} aprobada por la ejecución ${{ github.run_id }}."
+          for intento in 1 2 3; do git push && break || (git pull --rebase && sleep 3); done
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "### 🔁 GitOps: staging → ${ETIQUETA} (commit $(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+
+  despliegue-staging:
+    name: CD · Argo CD sincroniza staging
+    needs: gitops-staging
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/cd-gitops.yml
+    with:
+      entorno: staging
+      revision: ${{ needs.gitops-staging.outputs.revision }}

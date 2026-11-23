@@ -1,0 +1,20 @@
+# Entorno STAGING. El pipeline de CI actualiza newTag automáticamente cuando una versión pasa todas las
+# compuertas en main (commit "gitops(staging): ..."). Argo CD despliega lo que diga este archivo.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cab-staging
+resources:
+  - ../../base
+images:
+  - name: cab-chatbot-api
+    newName: ghcr.io/gagarang25/proyectofase3-api
+    newTag: pendiente
+replicas:
+  - name: cab-chatbot-api
+    count: 1
+patches:
+  - target: {kind: ConfigMap, name: cab-chatbot-config}
+    patch: |-
+      - op: replace
+        path: /data/ENTORNO
+        value: staging

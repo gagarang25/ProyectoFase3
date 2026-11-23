@@ -1,0 +1,10 @@
+# Durante mantenimientos del clúster siempre queda al menos una réplica atendiendo (SLO de disponibilidad 99.5 %).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cab-chatbot-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cab-chatbot-api

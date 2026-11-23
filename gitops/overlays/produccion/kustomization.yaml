@@ -1,0 +1,22 @@
+# Entorno PRODUCCIÓN. Solo cambia con un pull request aprobado (workflow "Promover a producción"):
+# la etiqueta de imagen debe ser una que ya pasó por staging. Revertir el PR = rollback.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cab-produccion
+resources:
+  - ../../base
+  - hpa.yaml
+  - pdb.yaml
+images:
+  - name: cab-chatbot-api
+    newName: ghcr.io/gagarang25/proyectofase3-api
+    newTag: pendiente
+replicas:
+  - name: cab-chatbot-api
+    count: 2
+patches:
+  - target: {kind: ConfigMap, name: cab-chatbot-config}
+    patch: |-
+      - op: replace
+        path: /data/ENTORNO
+        value: produccion

@@ -1,0 +1,71 @@
+# =============================================================================
+# Release · versionado semántico de artefactos
+#
+# Al subir una etiqueta (app-v*, model-v*, pipeline-v*):
+#   1. La imagen que está en staging en ese commit recibe también la etiqueta semántica en GHCR
+#      (ghcr.io/...:sha-abc1234 → ghcr.io/...:app-v2.0.0). Misma imagen, mismo digest: no se reconstruye.
+#   2. Se crea un release de GitHub con la tarjeta del modelo, el registro de auditoría, los metadatos de los
+#      modelos y las notas del CHANGELOG.
+# =============================================================================
+name: Release
+
+on:
+  push:
+    tags: ["app-v*", "model-v*", "pipeline-v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGEN: ghcr.io/gagarang25/proyectofase3-api
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "3.12", cache: pip, cache-dependency-path: monitoreo/requirements.txt}
+      - run: pip install -r monitoreo/requirements.txt
+
+      - name: Etiqueta semántica para la imagen de staging
+        run: |
+          ORIGEN=$(grep -E '^\s+newTag:' gitops/overlays/staging/kustomization.yaml | awk '{print $2}')
+          echo "ORIGEN=$ORIGEN" >> "$GITHUB_ENV"
+          if [ "$ORIGEN" != "pendiente" ]; then
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            docker buildx imagetools create -t "${IMAGEN}:${GITHUB_REF_NAME}" "${IMAGEN}:${ORIGEN}"
+            docker buildx imagetools inspect "${IMAGEN}:${GITHUB_REF_NAME}" | tee digest_release.txt
+          fi
+
+      - name: Compuertas, auditoría y tarjeta del modelo de esta versión
+        run: |
+          python pipeline/validar_datos.py
+          python pipeline/evaluar_modelos.py
+          IMAGEN_REF="${IMAGEN}:${GITHUB_REF_NAME}" python pipeline/auditoria.py --reportes pipeline/reportes
+          cp backend/modelos/metadatos_modelos.json pipeline/reportes/auditoria/
+
+      - name: Notas del release (sección del CHANGELOG)
+        run: |
+          python - <<'EOF' > notas.md
+          import os, re
+          texto = open("CHANGELOG.md", encoding="utf-8").read()
+          etiqueta = os.environ["GITHUB_REF_NAME"]
+          m = re.search(rf"^## {re.escape(etiqueta)}.*?(?=^## |\Z)", texto, re.S | re.M)
+          print(m.group(0) if m else f"Versión {etiqueta}")
+          print(f"\nImagen: `{os.environ['IMAGEN']}:{etiqueta}` (origen `{os.environ['ORIGEN']}`)")
+          EOF
+          cat notas.md
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          body_path: notas.md
+          files: |
+            pipeline/reportes/auditoria/MODEL_CARD.md
+            pipeline/reportes/auditoria/registro_auditoria.json
+            pipeline/reportes/auditoria/metadatos_modelos.json
+            pipeline/reportes/validacion_datos.md
+            pipeline/reportes/evaluacion_modelos.md

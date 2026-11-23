@@ -1,0 +1,69 @@
+# =============================================================================
+# Promover a producción (GitOps): propone, mediante un pull request, que producción use la imagen que ya
+# está en staging. Producción solo cambia cuando una persona aprueba el PR; al fusionarlo, cd-gitops.yml
+# despliega. Rollback = revertir el PR (la versión anterior sigue en el historial de Git y en GHCR).
+# =============================================================================
+name: Promover a producción
+
+on:
+  workflow_dispatch:
+    inputs:
+      etiqueta:
+        description: "Etiqueta de imagen (vacío = la que está en staging)"
+        required: false
+        default: ""
+      motivo:
+        description: "Motivo del cambio (queda en el PR y en el historial)"
+        required: true
+        default: "Promoción de la versión validada en staging"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  proponer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Preparar el cambio en gitops/overlays/produccion
+        id: cambio
+        env:                                   # las entradas se pasan como variables (evita inyección de comandos)
+          ETIQUETA_ENTRADA: ${{ inputs.etiqueta }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          STAGING=$(grep -E '^\s+newTag:' gitops/overlays/staging/kustomization.yaml | awk '{print $2}')
+          ETIQUETA=${ETIQUETA_ENTRADA:-$STAGING}
+          [[ "$ETIQUETA" =~ ^(sha-[0-9a-f]{7}|app-v[0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "Etiqueta inválida: $ETIQUETA"; exit 1; }
+          ACTUAL=$(grep -E '^\s+newTag:' gitops/overlays/produccion/kustomization.yaml | awk '{print $2}')
+          if [ "$ETIQUETA" = "pendiente" ]; then echo "staging aún no tiene imagen"; exit 1; fi
+          if [ "$ETIQUETA" = "$ACTUAL" ]; then echo "Producción ya usa $ETIQUETA"; exit 1; fi
+          sed -i "s/^    newTag: .*/    newTag: ${ETIQUETA}/" gitops/overlays/produccion/kustomization.yaml
+          RAMA="promocion/produccion-${ETIQUETA}"
+          git config user.name "cab-pipeline[bot]"
+          git config user.email "cab-pipeline@users.noreply.github.com"
+          git checkout -b "$RAMA"
+          git commit -am "gitops(produccion): ${ACTUAL} → ${ETIQUETA}" -m "$MOTIVO"
+          git push -u origin "$RAMA"
+          echo "rama=$RAMA" >> "$GITHUB_OUTPUT"
+          echo "etiqueta=$ETIQUETA" >> "$GITHUB_OUTPUT"
+          echo "actual=$ACTUAL" >> "$GITHUB_OUTPUT"
+      - name: Abrir el pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MOTIVO: ${{ inputs.motivo }}
+        run: |
+          CUERPO="Promoción GitOps de **${{ steps.cambio.outputs.actual }} → ${{ steps.cambio.outputs.etiqueta }}**.
+
+          - Motivo: ${MOTIVO}
+          - La imagen ya pasó CI (compuertas de datos, modelos, aceptación y auditoría) y está sincronizada en staging.
+          - Al fusionar, el workflow **CD GitOps** registra la revisión en Argo CD y ejecuta las pruebas de humo.
+          - Rollback: revertir este PR."
+          if gh pr create --base main --head "${{ steps.cambio.outputs.rama }}" \
+               --title "Producción: ${{ steps.cambio.outputs.etiqueta }}" --body "$CUERPO"; then
+            echo "### ✅ PR de promoción creado" >> "$GITHUB_STEP_SUMMARY"
+          else
+            URL="${{ github.server_url }}/${{ github.repository }}/compare/main...${{ steps.cambio.outputs.rama }}?expand=1"
+            echo "### 👉 Abre el PR de promoción: $URL" >> "$GITHUB_STEP_SUMMARY"
+            echo "(El repositorio no permite que Actions cree PR; ábrelo desde el enlace.)" >> "$GITHUB_STEP_SUMMARY"
+          fi

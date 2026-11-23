@@ -1,0 +1,18 @@
+# Autoescalado horizontal (arquitectura D de la A9: 2–4 réplicas). Escala con la CPU porque el router es la
+# parte más costosa de cada solicitud; la A9 midió 24.2 sol/s por réplica con ONNX.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cab-chatbot-api
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: cab-chatbot-api}
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300    # evita subir y bajar réplicas en cada pico (ruido de la A8)

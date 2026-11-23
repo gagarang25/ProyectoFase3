@@ -1,0 +1,13 @@
+# Estado deseado del chatbot de CAB (GitOps). Argo CD compara este estado con el del clúster y lo reconcilia.
+# Las capas (overlays) solo cambian lo que difiere por entorno: namespace, réplicas, imagen y escalamiento.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/name: cab-chatbot-api
+      app.kubernetes.io/part-of: chatbot-cab
+    includeSelectors: true
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml

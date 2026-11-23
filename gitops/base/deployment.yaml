@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cab-chatbot-api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5            # permite rollback rápido además del revert en Git
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}   # despliegue sin cortes: la versión nueva entra antes de retirar la anterior
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: cab-chatbot-api        # la etiqueta exacta la fija cada overlay (kustomize images)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8000}
+          envFrom:
+            - configMapRef: {name: cab-chatbot-config}
+          resources:
+            requests: {cpu: "500m", memory: "1200Mi"}   # A9: 1,167 MB medidos con ONNX + embeddings INT8
+            limits: {cpu: "2", memory: "2Gi"}
+          startupProbe:                                 # la carga del router tarda ~2 s con ONNX (60 s con PyTorch)
+            httpGet: {path: /api/salud, port: http}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: {path: /api/salud, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet: {path: /api/salud, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 4
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,61 @@
+# =============================================================================
+# Monitoreo semanal del modelo en producción (plano de modelo de la A8, ahora automático)
+#
+# Cada lunes mide, con las entregas que ya tienen etiqueta, el MAE del modelo de ETA que sirve la API y el drift
+# de sus entradas. Si se cumple un disparador (MAE > 1.30, PSI > 0.25 o > 5 % de órdenes fuera de rango),
+# lanza el entrenamiento continuo (ct.yml). Cierra el ciclo: monitoreo → reentrenamiento → GitOps.
+# =============================================================================
+name: Monitoreo del modelo
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"            # lunes 07:17 en Ciudad de México
+  workflow_dispatch:
+    inputs:
+      corte:
+        description: "Fecha de corte AAAA-MM-DD (vacío = hoy)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: write                     # para lanzar ct.yml
+
+env:
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  monitorear:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: {python-version: "3.12", cache: pip, cache-dependency-path: monitoreo/requirements.txt}
+      - run: pip install -r monitoreo/requirements.txt
+      - name: Fecha de corte
+        env:
+          CORTE_ENTRADA: ${{ inputs.corte }}
+        run: |
+          CORTE=${CORTE_ENTRADA:-$(TZ=America/Mexico_City date +%F)}
+          [[ "$CORTE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || exit 1
+          echo "CORTE=$CORTE" >> "$GITHUB_ENV"
+      - name: Entregas con etiqueta hasta el corte
+        id: lote
+        run: |
+          python pipeline/ct/ingestar_lote.py --hasta "$CORTE" | tee ingesta.txt
+          echo "ruta=$(grep '^LOTE=' ingesta.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+      - name: Drift de entradas (aviso)
+        run: python pipeline/validar_datos.py --lote "${{ steps.lote.outputs.ruta }}"
+      - name: Calidad del modelo en producción (disparadores)
+        id: diag
+        run: python pipeline/ct/reentrenar.py --lote "${{ steps.lote.outputs.ruta }}" --corte "$CORTE" --solo-diagnostico
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: {name: "monitoreo-${{ env.CORTE }}", path: pipeline/reportes/, retention-days: 90}
+      - name: Lanzar el entrenamiento continuo
+        if: steps.diag.outputs.alerta == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run ct.yml -f corte="$CORTE" -f escenario=drift_planta
+          echo "### 🔔 Alerta del modelo: se lanzó CT con corte $CORTE" >> "$GITHUB_STEP_SUMMARY"

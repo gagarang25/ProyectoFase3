@@ -1,0 +1,116 @@
+# =============================================================================
+# CT · Entrenamiento continuo del modelo de ETA (champion / challenger)
+#
+#  ingesta del lote ─► pruebas de datos + drift ─► disparadores ─► challenger ─► compuertas de promoción
+#        ─► MLflow (experimento, registro, respaldo) ─► pruebas de CI con el modelo nuevo ─► rama ct/<versión> + PR
+#
+# La promoción NO es automática: el modelo nuevo llega a main solo con un pull request aprobado por el dueño del
+# modelo (GitOps). Al fusionarlo, CI construye la imagen y la despliega en staging.
+# Lo dispara monitoreo.yml cuando detecta degradación o drift, o una persona (workflow_dispatch).
+# =============================================================================
+name: CT
+
+on:
+  workflow_dispatch:
+    inputs:
+      corte:
+        description: "Fecha de corte AAAA-MM-DD (vacío = hoy)"
+        required: false
+        default: ""
+      escenario:
+        type: choice
+        options: [drift_planta, normal]
+        default: drift_planta
+      forzar:
+        description: "Reentrenar aunque no haya disparadores"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ct
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  reentrenar:
+    name: Reentrenamiento y compuertas de promoción
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "${{ env.PYTHON_VERSION }}"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            monitoreo/requirements.txt
+      - run: pip install -r backend/requirements.txt -r monitoreo/requirements.txt
+
+      - name: Parámetros
+        env:
+          CORTE_ENTRADA: ${{ inputs.corte }}
+        run: |
+          CORTE=${CORTE_ENTRADA:-$(TZ=America/Mexico_City date +%F)}
+          [[ "$CORTE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "Fecha inválida"; exit 1; }
+          echo "CORTE=$CORTE" >> "$GITHUB_ENV"
+
+      - name: 1 · Ingesta del lote de entregas con etiqueta
+        id: lote
+        run: |
+          python pipeline/ct/ingestar_lote.py --hasta "$CORTE" --escenario "${{ inputs.escenario }}" | tee ingesta.txt
+          echo "ruta=$(grep '^LOTE=' ingesta.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: 2 · Pruebas de datos y drift del lote
+        run: python pipeline/validar_datos.py --lote "${{ steps.lote.outputs.ruta }}"
+
+      - name: 3-5 · Disparadores, challenger, compuertas y MLflow
+        id: ct
+        run: |
+          python pipeline/ct/reentrenar.py --lote "${{ steps.lote.outputs.ruta }}" --corte "$CORTE" \
+            ${{ inputs.forzar && '--forzar' || '' }}
+
+      - name: 6 · Pruebas de CI con el modelo candidato
+        if: steps.ct.outputs.promovido == 'true'
+        run: |
+          python pipeline/validar_datos.py
+          python pipeline/evaluar_modelos.py
+          python -m pytest -q backend/tests pipeline/tests
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ct-${{ env.CORTE }}
+          path: |
+            pipeline/reportes/
+            pipeline/registro/
+          retention-days: 90
+
+      - name: 7 · Proponer el modelo nuevo (rama + pull request)
+        if: steps.ct.outputs.promovido == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ct.outputs.version }}
+          LOTE: ${{ steps.lote.outputs.ruta }}
+        run: |
+          RAMA="ct/${VERSION}-${CORTE}"
+          git config user.name "cab-pipeline[bot]"
+          git config user.email "cab-pipeline@users.noreply.github.com"
+          git checkout -b "$RAMA"
+          git add "$LOTE" datos/entregas/lotes/versiones.json backend/modelos/ pipeline/registro/modelos.json
+          git commit -m "ct: ${VERSION} (ETA reentrenado con entregas hasta ${CORTE})" \
+                     -m "$(python -c "import json;d=json.load(open('pipeline/reportes/ct_decision.json'));print('Motivos: ' + '; '.join(d['disparadores']['motivos']))")" \
+                     -m "Ejecución: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push -u origin "$RAMA"
+          if gh pr create --base main --head "$RAMA" --title "Modelo ${VERSION}: reentrenamiento (corte ${CORTE})" \
+               --body-file pipeline/reportes/ct_decision.md; then
+            echo "### ✅ PR del modelo ${VERSION} creado" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 👉 Abre el PR del modelo: ${{ github.server_url }}/${{ github.repository }}/compare/main...${RAMA}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          fi

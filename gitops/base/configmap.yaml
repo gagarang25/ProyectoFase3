@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cab-chatbot-config
+data:
+  ROUTER_RUNTIME: "onnx"            # optimización de la A9 (sin PyTorch)
+  HILOS_CPU: "2"
+  UMBRAL_CONFIANZA: "0.90"          # Fase 1: escalar en caso de duda
+  FECHA_REFERENCIA: "2026-10-28"    # "hoy" del SAP simulado (datos del piloto)
+  BITACORA_RUTA: ""                 # la bitácora va a la salida estándar (la recoge el clúster)
+  ENTORNO: "base"
