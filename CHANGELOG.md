@@ -9,6 +9,9 @@
 - `gitops/`: manifiestos de Kubernetes con Kustomize (staging y producción con HPA 2–4 y PDB) y aplicaciones de Argo CD.
 - Pruebas del propio pipeline: datos corruptos a propósito y ausencia de *training-serving skew*.
 - Análisis estático con ruff (`ruff.toml`); correcciones menores de importaciones en `monitoreo/` y `optimizacion/`.
+- Iteración 2: parches del sistema operativo y de pip en la imagen (vulnerabilidades 254 → 218; con parche 49 → 13),
+  resumen de vulnerabilidades por severidad, tipo y paquete en CI, y disparadores activos mostrados como aviso.
+- Iteración 3: el commit de GitOps parte siempre del `main` más reciente (corrige el choque entre dos CI seguidos).
 
 ## app-v2.0.0 · Proyecto Fase 3 (API optimizada y observable)
 - Router con ONNX Runtime y embeddings INT8 (optimización de la A9) generado dentro del `docker build` con compuerta

@@ -255,13 +255,20 @@ jobs:
         id: commit
         run: |
           ETIQUETA=${{ needs.imagen.outputs.etiqueta }}
-          sed -i "s/^    newTag: .*/    newTag: ${ETIQUETA}/" gitops/overlays/staging/kustomization.yaml
           git config user.name "cab-pipeline[bot]"
           git config user.email "cab-pipeline@users.noreply.github.com"
-          git add gitops/overlays/staging/kustomization.yaml
-          git commit -m "gitops(staging): cab-chatbot-api ${ETIQUETA}" \
-                     -m "Imagen ${{ env.IMAGEN }}@${{ needs.imagen.outputs.digest }} aprobada por la ejecución ${{ github.run_id }}."
-          for intento in 1 2 3; do git push && break || (git pull --rebase && sleep 3); done
+          # Iteración 3: dos ejecuciones seguidas editaban la misma línea y el rebase chocaba (CI de a2fa9ac).
+          # Ahora cada intento parte del main más reciente y solo cambia la etiqueta de staging.
+          for intento in 1 2 3; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            sed -i "s/^    newTag: .*/    newTag: ${ETIQUETA}/" gitops/overlays/staging/kustomization.yaml
+            git add gitops/overlays/staging/kustomization.yaml
+            git commit -q -m "gitops(staging): cab-chatbot-api ${ETIQUETA}" \
+                          -m "Imagen ${{ env.IMAGEN }}@${{ needs.imagen.outputs.digest }} aprobada por la ejecución ${{ github.run_id }}."
+            if git push -q origin HEAD:main; then break; fi
+            echo "main cambió mientras tanto; reintento $intento"; sleep 5
+          done
+          git fetch -q origin main && test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "### 🔁 GitOps: staging → ${ETIQUETA} (commit $(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
 
